@@ -1,0 +1,84 @@
+name: Deploy Frontend Innovatech
+
+on:
+  push:
+    branches:
+      - deploy
+
+env:
+  IMAGE_TAG: latest
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Definir imagen frontend
+        run: |
+          echo "FRONTEND_IMAGE=${{ steps.login-ecr.outputs.registry }}/innovatech-frontend:${IMAGE_TAG}" >> $GITHUB_ENV
+
+      - name: Build y push Frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.FRONTEND_IMAGE }}
+
+      - name: Deploy Frontend EC2
+        run: |
+          cat > /tmp/deploy-frontend.sh <<'SCRIPT'
+          #!/bin/bash
+          set -eux
+
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+
+          mkdir -p /opt/innovatech-frontend
+          cd /opt/innovatech-frontend
+
+          cat > docker-compose.yml <<'COMPOSE'
+          services:
+            frontend:
+              image: __FRONTEND_IMAGE__
+              container_name: innovatech-frontend
+              restart: unless-stopped
+              environment:
+                BACKEND_VENTAS_URL: http://__BACKEND_PRIVATE_IP__:8080
+                BACKEND_DESPACHOS_URL: http://__BACKEND_PRIVATE_IP__:8081
+              ports:
+                - "80:8080"
+          COMPOSE
+
+          sed -i 's#__FRONTEND_IMAGE__#${{ env.FRONTEND_IMAGE }}#g' docker-compose.yml
+          sed -i 's#__BACKEND_PRIVATE_IP__#${{ secrets.BACKEND_PRIVATE_IP }}#g' docker-compose.yml
+
+          docker compose pull || docker-compose pull
+          docker compose up -d || docker-compose up -d
+          docker ps
+          SCRIPT
+
+          COMMANDS=$(jq -Rs 'split("\n") | map(select(length > 0))' /tmp/deploy-frontend.sh)
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "${{ secrets.FRONTEND_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy Frontend Innovatech" \
+            --parameters commands="$COMMANDS" \
+            --query "Command.CommandId" \
+            --output text)
+
+          aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "${{ secrets.FRONTEND_INSTANCE_ID }}" || true
