@@ -39,46 +39,9 @@ jobs:
           push: true
           tags: ${{ env.FRONTEND_IMAGE }}
 
-      - name: Deploy Frontend EC2
+      - name: Deploy a ECS Frontend
         run: |
-          cat > /tmp/deploy-frontend.sh <<'SCRIPT'
-          #!/bin/bash
-          set -eux
-
-          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
-
-          mkdir -p /opt/innovatech-frontend
-          cd /opt/innovatech-frontend
-
-          cat > docker-compose.yml <<'COMPOSE'
-          services:
-            frontend:
-              image: __FRONTEND_IMAGE__
-              container_name: innovatech-frontend
-              restart: unless-stopped
-              environment:
-                BACKEND_VENTAS_URL: http://__BACKEND_PRIVATE_IP__:8080
-                BACKEND_DESPACHOS_URL: http://__BACKEND_PRIVATE_IP__:8081
-              ports:
-                - "80:8080"
-          COMPOSE
-
-          sed -i 's#__FRONTEND_IMAGE__#${{ env.FRONTEND_IMAGE }}#g' docker-compose.yml
-          sed -i 's#__BACKEND_PRIVATE_IP__#${{ secrets.BACKEND_PRIVATE_IP }}#g' docker-compose.yml
-
-          docker compose pull || docker-compose pull
-          docker compose up -d || docker-compose up -d
-          docker ps
-          SCRIPT
-
-          COMMANDS=$(jq -Rs 'split("\n") | map(select(length > 0))' /tmp/deploy-frontend.sh)
-
-          COMMAND_ID=$(aws ssm send-command \
-            --instance-ids "${{ secrets.FRONTEND_INSTANCE_ID }}" \
-            --document-name "AWS-RunShellScript" \
-            --comment "Deploy Frontend Innovatech" \
-            --parameters commands="$COMMANDS" \
-            --query "Command.CommandId" \
-            --output text)
-
-          aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "${{ secrets.FRONTEND_INSTANCE_ID }}" || true
+          aws ecs update-service \
+            --cluster innovatech-cluster2 \
+            --service innovatech-frontend-svc \
+            --force-new-deployment
