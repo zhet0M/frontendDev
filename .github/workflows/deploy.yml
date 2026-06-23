@@ -1,0 +1,47 @@
+name: Deploy Frontend Innovatech
+
+on:
+  push:
+    branches:
+      - deploy
+
+env:
+  IMAGE_TAG: latest
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Definir imagen frontend
+        run: |
+          echo "FRONTEND_IMAGE=${{ steps.login-ecr.outputs.registry }}/innovatech-frontend:${IMAGE_TAG}" >> $GITHUB_ENV
+
+      - name: Build y push Frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.FRONTEND_IMAGE }}
+
+      - name: Deploy a ECS Frontend
+        run: |
+          aws ecs update-service \
+            --cluster innovatech-cluster2 \
+            --service innovatech-frontend-svc \
+            --force-new-deployment

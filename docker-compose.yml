@@ -1,0 +1,11 @@
+services:
+  frontend:
+    build:
+      context: .
+    container_name: innovatech-frontend
+    restart: unless-stopped
+    environment:
+      BACKEND_VENTAS_URL: http://host.docker.internal:8080
+      BACKEND_DESPACHOS_URL: http://host.docker.internal:8081
+    ports:
+      - "80:8080"
